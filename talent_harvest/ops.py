@@ -14,6 +14,7 @@ from .ledger import Ledger
 from .extractors import extract
 from .normalize import normalize_page
 from .policy import assess
+from .reconcile import select_current
 
 
 class Operations:
@@ -95,7 +96,8 @@ class Operations:
         for row in rows:
             items.append({"observation_id": row["id"], "source": row["source"],
                           "batch": row["batch"], "page": row["ordinal"],
-                          "record_id": row["record_id"], "identity": row["identity"],
+                          "record_id": row["record_id"], "event_id": row["event_id"],
+                          "occurred_at": row["occurred_at"], "identity": row["identity"],
                           "version": row["version"], "status": row["status"],
                           "reasons": json.loads(row["reasons"]),
                           "record": json.loads(row["record_json"]),
@@ -113,7 +115,7 @@ class Operations:
         for identity, observations in sorted(by_identity.items()):
             sources = sorted({item["source"] for item in observations})
             latest: dict[tuple[str, str], dict] = {}
-            for row in observations:
+            for row in select_current(observations):
                 latest[row["source"], row["record_id"]] = row
             active = [item for item in latest.values() if item["status"] == "accepted"
                       and not item["withdrawn_at"]]

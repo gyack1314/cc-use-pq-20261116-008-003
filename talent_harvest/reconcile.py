@@ -39,6 +39,30 @@ def choose_preferred(rows: list[dict]) -> dict:
                                          row["record_id"], -row["version"]))[0]
 
 
+def select_current(rows: Iterable[dict]) -> list[dict]:
+    """Pick the current observation per (source, record_id) by business order.
+
+    Events are ordered by (occurred_at, event_id), never by arrival: a
+    backfilled page with an earlier occurred_at must not displace a newer
+    state. Intake guarantees that distinct events for one record_id never
+    share an occurred_at unless their content is identical, so the event_id
+    tie-break only chooses between equivalent statements. When an event was
+    observed more than once, its first arrival represents it.
+    """
+    current: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        key = row["source"], row["record_id"]
+        winner = current.get(key)
+        if winner is None:
+            current[key] = row
+            continue
+        candidate_order = (row["occurred_at"], row["event_id"])
+        winner_order = (winner["occurred_at"], winner["event_id"])
+        if candidate_order > winner_order or (candidate_order == winner_order and row["id"] < winner["id"]):
+            current[key] = row
+    return list(current.values())
+
+
 def reconcile_group(rows: list[dict]) -> tuple[str, str, dict | None]:
     if not rows:
         return "empty", "", None

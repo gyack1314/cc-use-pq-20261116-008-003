@@ -9,21 +9,12 @@ import json
 
 from .contracts import HarvestError, canonical
 from .ledger import Ledger
-from .reconcile import reconcile_group
-
-
-def _latest_per_source(rows: list[dict]) -> list[dict]:
-    latest: dict[tuple[str, str], dict] = {}
-    for row in rows:
-        key = row["source"], row["record_id"]
-        previous = latest.get(key)
-        if previous is None or row["id"] > previous["id"]:
-            latest[key] = row
-    return list(latest.values())
+from .reconcile import reconcile_group, select_current
 
 
 def _project(row: dict) -> dict:
     return {"source": row["source"], "source_record_id": row["record_id"],
+            "event_id": row["event_id"], "occurred_at": row["occurred_at"],
             "batch": row["batch"], "page": row["ordinal"], "version": row["version"],
             "captured_at": row["captured_at"], "observed_at": row["observed_at"],
             "status": row["status"], "reasons": row["reasons"], "trust": row["trust"],
@@ -35,7 +26,7 @@ class Delivery:
         self.ledger = ledger
 
     def current(self, *, include_quarantine: bool = False) -> dict:
-        rows = [row for row in _latest_per_source(self.ledger.observations()) if not row["withdrawn_at"]]
+        rows = [row for row in select_current(self.ledger.observations()) if not row["withdrawn_at"]]
         groups: dict[str, list[dict]] = defaultdict(list)
         for row in rows:
             groups[row["identity"]].append(row)

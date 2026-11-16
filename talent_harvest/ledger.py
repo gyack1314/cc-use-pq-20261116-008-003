@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS pages (
 );
 CREATE TABLE IF NOT EXISTS observations (
  id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, batch TEXT NOT NULL,
- ordinal INTEGER NOT NULL, record_id TEXT NOT NULL, identity TEXT NOT NULL,
+ ordinal INTEGER NOT NULL, record_id TEXT NOT NULL, event_id TEXT NOT NULL,
+ occurred_at TEXT NOT NULL, identity TEXT NOT NULL,
  record_json TEXT NOT NULL, raw_json TEXT NOT NULL, raw_digest TEXT NOT NULL,
  status TEXT NOT NULL, reasons TEXT NOT NULL, version INTEGER NOT NULL,
  captured_at TEXT NOT NULL, observed_at TEXT NOT NULL,
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS observations (
 );
 CREATE INDEX IF NOT EXISTS observations_identity ON observations(identity);
 CREATE INDEX IF NOT EXISTS observations_source_record ON observations(source,record_id,version);
+CREATE INDEX IF NOT EXISTS observations_source_event ON observations(source,event_id);
 CREATE TABLE IF NOT EXISTS source_records (
  source TEXT NOT NULL REFERENCES sources(key), record_id TEXT NOT NULL,
  version INTEGER NOT NULL, latest_observation INTEGER NOT NULL REFERENCES observations(id),
@@ -177,27 +179,88 @@ class Ledger:
             self.db.execute("UPDATE batches SET state='failed' WHERE source=? AND batch=?", (source, batch))
             self.event("page_failed", source, batch, ordinal, {"code": error.code, "detail": error.detail})
 
+    def _stored_events(self, source: str, event_ids: list[str], record_ids: list[str]) -> list[Row]:
+        rows: list[Row] = []
+        for column, values in (("event_id", event_ids), ("record_id", record_ids)):
+            for start in range(0, len(values), 500):
+                part = values[start:start + 500]
+                marks = ",".join("?" for _ in part)
+                rows.extend(self.db.execute(
+                    f"SELECT record_id,event_id,occurred_at,record_json FROM observations "
+                    f"WHERE source=? AND {column} IN ({marks})", (source, *part)).fetchall())
+        return rows
+
+    def validate_events(self, source: str,
+                        items: list[tuple[Record, dict, str, tuple[str, ...]]]) -> int:
+        """Check a page's events against each other and the stored history.
+
+        Returns the number of exact re-statements (same event_id, same
+        content). Raises HarvestError when an event_id is reused with
+        different content or when one record_id has conflicting states at the
+        same occurred_at; the caller fails the page, which stays retryable.
+        """
+        seen: dict[str, Record] = {}
+        for record, _raw, _status, _reasons in items:
+            prior = seen.get(record.event_id)
+            if prior is not None:
+                if prior.document() != record.document():
+                    raise HarvestError("event_conflict",
+                                       f"event {record.event_id} has conflicting content within page")
+                raise HarvestError("duplicate_page_event",
+                                   f"event {record.event_id} repeats within page")
+            seen[record.event_id] = record
+        if not seen:
+            return 0
+        event_ids = sorted(seen)
+        record_ids = sorted({record.source_record_id for record in seen.values()})
+        stored_events: dict[str, str] = {}
+        stored_moments: dict[tuple[str, str], str] = {}
+        for row in self._stored_events(source, event_ids, record_ids):
+            stored_events[row["event_id"]] = row["record_json"]
+            state = json.loads(row["record_json"])
+            state.pop("event_id", None)
+            stored_moments[(row["record_id"], row["occurred_at"])] = canonical(state)
+        duplicates = 0
+        for record in seen.values():
+            document = canonical(record.document())
+            prior = stored_events.get(record.event_id)
+            if prior is not None:
+                if prior != document:
+                    raise HarvestError("event_conflict",
+                                       f"event {record.event_id} already stored with different content")
+                duplicates += 1
+                continue
+            moment = stored_moments.get((record.source_record_id, record.occurred_at))
+            if moment is not None and moment != canonical(record.state_document()):
+                raise HarvestError("event_conflict",
+                                   f"{record.source_record_id} has a conflicting event at {record.occurred_at}")
+        return duplicates
+
     def commit_page(self, source: str, batch: str, ordinal: int,
                     items: list[tuple[Record, dict, str, tuple[str, ...]]]) -> dict:
         with self.transaction():
             row = self.page(source, batch, ordinal)
             if row["state"] == "complete":
-                return {"ordinal": ordinal, "unchanged": True, "records": row["record_count"]}
+                return {"ordinal": ordinal, "unchanged": True, "records": row["record_count"],
+                        "duplicates": 0}
+            duplicates = self.validate_events(source, items)
             captured = self.db.execute("SELECT captured_at FROM batches WHERE source=? AND batch=?",
                                        (source, batch)).fetchone()[0]
             for record, raw, status, reasons in items:
                 previous = self.db.execute("SELECT version FROM source_records WHERE source=? AND record_id=?",
                                            (source, record.source_record_id)).fetchone()
                 version = previous[0] + 1 if previous else 1
-                cursor = self.db.execute("INSERT INTO observations(source,batch,ordinal,record_id,identity,record_json,raw_json,raw_digest,status,reasons,version,captured_at,observed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                                         (source, batch, ordinal, record.source_record_id, record.identity,
+                cursor = self.db.execute("INSERT INTO observations(source,batch,ordinal,record_id,event_id,occurred_at,identity,record_json,raw_json,raw_digest,status,reasons,version,captured_at,observed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                         (source, batch, ordinal, record.source_record_id, record.event_id,
+                                          record.occurred_at, record.identity,
                                           canonical(record.document()), canonical(raw), record.raw_digest,
                                           status, canonical(reasons), version, captured, utc_now()))
                 self.db.execute("INSERT INTO source_records(source,record_id,version,latest_observation) VALUES(?,?,?,?) ON CONFLICT(source,record_id) DO UPDATE SET version=excluded.version,latest_observation=excluded.latest_observation",
                                 (source, record.source_record_id, version, cursor.lastrowid))
             self.db.execute("UPDATE pages SET state='complete',attempts=attempts+1,error_code=NULL,error_detail=NULL,processed_at=?,record_count=? WHERE source=? AND batch=? AND ordinal=?",
                             (utc_now(), len(items), source, batch, ordinal))
-            self.event("page_committed", source, batch, ordinal, {"records": len(items)})
+            self.event("page_committed", source, batch, ordinal,
+                       {"records": len(items), "duplicates": duplicates})
             incomplete = self.db.execute("SELECT count(*) FROM pages WHERE source=? AND batch=? AND state!='complete'",
                                          (source, batch)).fetchone()[0]
             if incomplete == 0:
@@ -209,7 +272,8 @@ class Ledger:
                                          (source, batch)).fetchone()[0]
                 self.db.execute("UPDATE batches SET state=? WHERE source=? AND batch=?",
                                 ("failed" if failed else "pending", source, batch))
-            return {"ordinal": ordinal, "unchanged": False, "records": len(items)}
+            return {"ordinal": ordinal, "unchanged": False, "records": len(items),
+                    "duplicates": duplicates}
 
     def withdraw(self, source: str, reason: str) -> dict:
         with self.transaction():

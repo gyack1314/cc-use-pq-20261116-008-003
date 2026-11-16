@@ -6,10 +6,10 @@ from typing import Any
 import re
 import unicodedata
 
-from .contracts import HarvestError, Record, Source, content_digest, identifier, required
+from .contracts import HarvestError, Record, Source, content_digest, identifier, required, utc_instant
 
 
-FIELDS = {"record_id", "organization", "title", "region", "discipline",
+FIELDS = {"record_id", "event_id", "occurred_at", "organization", "title", "region", "discipline",
           "quantity", "published_at", "reference", "description"}
 
 
@@ -59,6 +59,8 @@ def normalize(source: Source, raw: dict[str, Any]) -> Record:
     if not isinstance(raw, dict):
         raise HarvestError("record_shape", "record must be object")
     record_id = identifier(lookup(raw, source, "record_id"), "record_id")
+    event_id = identifier(lookup(raw, source, "event_id"), "event_id")
+    occurred_at = utc_instant(lookup(raw, source, "occurred_at"), "occurred_at")
     organization = category(lookup(raw, source, "organization"), "organization")
     title = category(lookup(raw, source, "title"), "title")
     region = category(lookup(raw, source, "region"), "region")
@@ -75,8 +77,11 @@ def normalize(source: Source, raw: dict[str, Any]) -> Record:
         reference = f"{source.key}:{record_id}"
     identity_material = "|".join((source.kind, search_key(organization), search_key(title), search_key(region)))
     identity = sha256(identity_material.encode("utf-8")).hexdigest()
-    return Record(source.key, record_id, source.kind, organization, title, region, discipline, amount,
-                  date, compact(reference), compact(description), identity, content_digest(raw))
+    return Record(source=source.key, source_record_id=record_id, event_id=event_id, kind=source.kind,
+                  organization=organization, title=title, region=region, discipline=discipline,
+                  quantity=amount, published_at=date, occurred_at=occurred_at,
+                  reference=compact(reference), description=compact(description),
+                  identity=identity, raw_digest=content_digest(raw))
 
 
 def normalize_page(source: Source, rows: list[dict[str, Any]]) -> list[Record]:

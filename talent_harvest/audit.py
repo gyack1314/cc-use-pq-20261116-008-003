@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 import json
 
-from .contracts import HarvestError, Manifest, Record, Source, canonical, content_digest
+from .contracts import HarvestError, Manifest, Record, Source, canonical, content_digest, instant
 from .intake import manifest_digest
 from .ledger import Ledger
 
@@ -45,6 +45,7 @@ class Auditor:
         records = self.ledger.db.execute("SELECT * FROM source_records ORDER BY source,record_id").fetchall()
         for record in records:
             findings.extend(self._record_cursor(record))
+        findings.extend(self._event_consistency())
         foreign_keys = self.ledger.db.execute("PRAGMA foreign_key_check").fetchall()
         for row in foreign_keys:
             findings.append(Finding("error", "foreign_key", str(tuple(row)), "dangling reference"))
@@ -128,6 +129,12 @@ class Auditor:
             result.append(Finding("error", "record_identity", location, "normalized record identity mismatch"))
         if record.source_record_id != row["record_id"]:
             result.append(Finding("error", "source_record_id", location, "record identifier mismatch"))
+        if record.event_id != row["event_id"] or record.occurred_at != row["occurred_at"]:
+            result.append(Finding("error", "event_fields", location, "event identity or time mismatch"))
+        try:
+            instant(row["occurred_at"], "occurred_at")
+        except HarvestError as exc:
+            result.append(Finding("error", "occurred_at", location, exc.detail))
         if row["version"] < 1:
             result.append(Finding("error", "record_version", location, "version must be positive"))
         if row["status"] not in {"accepted", "quarantined"}:
@@ -148,6 +155,29 @@ class Auditor:
         if versions != list(range(1, len(versions) + 1)):
             result.append(Finding("error", "version_gap", location, "versions are not contiguous"))
         return result
+
+    def _event_consistency(self) -> list[Finding]:
+        findings: list[Finding] = []
+        rows = self.ledger.db.execute("SELECT source,record_id,event_id,occurred_at,record_json "
+                                      "FROM observations ORDER BY id").fetchall()
+        events: dict[tuple[str, str], dict] = {}
+        moments: dict[tuple[str, str, str], dict] = {}
+        for row in rows:
+            record = json.loads(row["record_json"])
+            event_key = (row["source"], row["event_id"])
+            if event_key in events and events[event_key] != record:
+                findings.append(Finding("error", "event_contradiction",
+                                        f"event:{row['source']}/{row['event_id']}",
+                                        "event stored with conflicting content"))
+            events.setdefault(event_key, record)
+            state = {key: value for key, value in record.items() if key != "event_id"}
+            moment_key = (row["source"], row["record_id"], row["occurred_at"])
+            if moment_key in moments and moments[moment_key] != state:
+                findings.append(Finding("error", "event_time_clash",
+                                        f"record:{row['source']}/{row['record_id']}",
+                                        f"conflicting states at {row['occurred_at']}"))
+            moments.setdefault(moment_key, state)
+        return findings
 
     def operational(self) -> dict:
         batches = self.ledger.db.execute("SELECT source,batch,state,started_at,completed_at FROM batches ORDER BY source,batch")

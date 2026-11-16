@@ -121,7 +121,8 @@ class OperationsTests(unittest.TestCase):
 
     def test_quarantined_latest_revision_suppresses_prior(self):
         self.work.ingest()
-        self.work.ingest(batch="batch-2", pages=[[record(quantity=0)]])
+        self.work.ingest(batch="batch-2", pages=[[record(quantity=0, event_id="evt-role-1-2",
+                                                         occurred_at="2026-09-15T08:00:00+00:00")]])
         self.assertEqual(Delivery(self.work.ledger).current()["counts"]["accepted"], 0)
         quality = Delivery(self.work.ledger).current(include_quarantine=True)
         self.assertEqual(quality["counts"]["quarantined"], 1)
@@ -129,7 +130,8 @@ class OperationsTests(unittest.TestCase):
 
     def test_revised_identity_does_not_retain_old_entity(self):
         self.work.ingest()
-        self.work.ingest(batch="batch-2", pages=[[record(title="Robotics Engineer")]])
+        self.work.ingest(batch="batch-2", pages=[[record(title="Robotics Engineer", event_id="evt-role-1-2",
+                                                         occurred_at="2026-09-15T08:00:00+00:00")]])
         current = Delivery(self.work.ledger).current()
         self.assertEqual(current["counts"]["accepted"], 1)
         self.assertEqual(current["accepted"][0]["record"]["title"], "Robotics Engineer")

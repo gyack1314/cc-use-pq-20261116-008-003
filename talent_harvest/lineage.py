@@ -7,6 +7,7 @@ from typing import Any
 from .contracts import HarvestError, canonical
 from .ledger import Ledger
 from .export import Delivery
+from .reconcile import select_current
 
 
 class Lineage:
@@ -24,6 +25,7 @@ class Lineage:
             fields = self._field_changes(previous["record"] if previous else None, row["record"])
             entries.append({"observation_id": row["id"], "batch": row["batch"],
                             "page": row["ordinal"], "version": row["version"],
+                            "event_id": row["event_id"], "occurred_at": row["occurred_at"],
                             "captured_at": row["captured_at"], "observed_at": row["observed_at"],
                             "identity": row["identity"], "status": row["status"],
                             "reasons": row["reasons"], "raw_digest": row["raw_digest"],
@@ -37,7 +39,7 @@ class Lineage:
                    and entity["selected"]["source_record_id"] == record_id]
         return {"source": source, "record_id": record_id, "versions": entries,
                 "withdrawn_at": source_row[0], "selected_current": visible,
-                "latest_status": rows[-1]["status"]}
+                "latest_status": select_current(rows)[0]["status"]}
 
     @staticmethod
     def _field_changes(previous: dict | None, current: dict) -> list[str]:

@@ -43,7 +43,8 @@ class PipelineTests(unittest.TestCase):
 
     def test_new_batch_increments_record_version(self):
         self.work.ingest()
-        self.work.ingest(batch="batch-2", pages=[[record(quantity=6)]])
+        self.work.ingest(batch="batch-2", pages=[[record(quantity=6, event_id="evt-role-1-2",
+                                                         occurred_at="2026-09-15T08:00:00+00:00")]])
         history = Delivery(self.work.ledger).history(source="company")["observations"]
         self.assertEqual([row["version"] for row in history], [1, 2])
         self.assertEqual(Delivery(self.work.ledger).current()["accepted"][0]["record"]["quantity"], 6)
@@ -170,7 +171,8 @@ class PipelineTests(unittest.TestCase):
 
     def test_lineage_follows_revisions_and_events(self):
         self.work.ingest()
-        self.work.ingest(batch="batch-2", pages=[[record(quantity=8)]])
+        self.work.ingest(batch="batch-2", pages=[[record(quantity=8, event_id="evt-role-1-2",
+                                                         occurred_at="2026-09-15T08:00:00+00:00")]])
         lineage = Lineage(self.work.ledger).record("company", "role-1")
         self.assertEqual(len(lineage["versions"]), 2)
         self.assertIn("quantity", lineage["versions"][1]["changed_fields"])
@@ -206,7 +208,9 @@ class PipelineTests(unittest.TestCase):
 
     def test_batch_comparison_identifies_changes(self):
         self.work.ingest(pages=[[record(), record(record_id="role-2", title="Analyst")]])
-        self.work.ingest(batch="batch-2", pages=[[record(quantity=8), record(record_id="role-3", title="Scientist")]])
+        self.work.ingest(batch="batch-2", pages=[[record(quantity=8, event_id="evt-role-1-2",
+                                                         occurred_at="2026-09-15T08:00:00+00:00"),
+                                                  record(record_id="role-3", title="Scientist")]])
         comparison = Inventory(self.work.ledger).batch_comparison("company", "batch-1", "batch-2")
         self.assertEqual(comparison["counts"], {"added": 1, "absent": 1, "changed": 1, "unchanged": 0})
         self.assertEqual(comparison["changed"][0]["after"]["version"], 2)

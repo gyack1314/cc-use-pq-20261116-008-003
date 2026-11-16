@@ -20,10 +20,11 @@ class PageResult:
     records: int
     unchanged: bool
     error: str = ""
+    duplicates: int = 0
 
     def document(self) -> dict[str, Any]:
         return {"ordinal": self.ordinal, "state": self.state, "records": self.records,
-                "unchanged": self.unchanged, "error": self.error}
+                "unchanged": self.unchanged, "error": self.error, "duplicates": self.duplicates}
 
 
 class Harvester:
@@ -48,7 +49,8 @@ class Harvester:
                 continue
             try:
                 result = self._process(path.parent, manifest, source, page.ordinal)
-                outcomes.append(PageResult(page.ordinal, "complete", result["records"], result["unchanged"]))
+                outcomes.append(PageResult(page.ordinal, "complete", result["records"],
+                                           result["unchanged"], duplicates=result["duplicates"]))
             except HarvestError as exc:
                 self.ledger.fail_page(manifest.source, manifest.batch, page.ordinal, exc)
                 outcomes.append(PageResult(page.ordinal, "failed", 0, False, str(exc)))

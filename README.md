@@ -25,7 +25,9 @@ ingest 对失败页返回非零退出码，并将原因保存在数据库。修�
 
 批次清单 JSON 包含 source、batch、带时区的 captured_at，以及顺序从 1 开始的 pages。每页包含相对 path 和对文件原始字节计算的 SHA-256。文件须位于清单目录下，UTF-8 编码，每页最多 2 MB，最多 10,000 条记录。JSON 页可用记录数组或 records 对象字段；CSV 的第一行为表头；HTML 页使用一个简单表格的首行作为表头。
 
-每条记录需要 record_id、organization、title、region、discipline、quantity、published_at（YYYY-MM-DD）；reference 与 description 可选。数量为非负整数，零数量、未来发布日期、低可信来源和缺少明确引用的合作项目会被隔离。基础实体键由类别、机构、标题和地区确定；相同实体的不同来源若数量、学科或发布日期不一致，会列入争议而非当前可用数据。实体键是精确规范化后的匹配，不做模糊别名判断。
+每条记录需要 record_id、event_id、occurred_at、organization、title、region、discipline、quantity、published_at（YYYY-MM-DD）；reference 与 description 可选。event_id 标识一次岗位状态变化，occurred_at 是带时区的状态发生时间，入库时规范化为 UTC。数量为非负整数，零数量、未来发布日期、低可信来源和缺少明确引用的合作项目会被隔离。基础实体键由类别、机构、标题和地区确定；相同实体的不同来源若数量、学科或发布日期不一致，会列入争议而非当前可用数据。实体键是精确规范化后的匹配，不做模糊别名判断。
+
+同一来源的同一岗位（record_id）由事件流确定状态：当前交付按 occurred_at 业务顺序（而非页到达顺序）采用该岗位最新有效事件的内容，因此乱序补页不会改写已确定的当前状态，停招（数量为零）与重开也不会同时进入供需汇总。采入时校验同一来源的事件：event_id 与已存事件内容一致视为重复到达，保留到达历史但不改变状态；event_id 相同而内容不同，或同一岗位在同一 occurred_at 出现不同内容，判定为矛盾，该页失败，修复镜像后需以新批次标识重新声明。页事务同时保留业务顺序（occurred_at）与到达顺序（observed_at、版本号）。撤回来源使用 withdraw SOURCE --reason TEXT，按来源范围整体撤回其全部事件，保留历史与审计事件。
 
 ## 查询与运维
 

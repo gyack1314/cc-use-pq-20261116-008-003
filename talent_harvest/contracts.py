@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -46,6 +46,11 @@ def instant(value: Any, field: str) -> str:
     return parsed.isoformat()
 
 
+def utc_instant(value: Any, field: str) -> str:
+    parsed = datetime.fromisoformat(instant(value, field))
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
 def canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -73,8 +78,8 @@ class Source:
         raw_map = value.get("field_map", {})
         if not isinstance(raw_map, dict) or not all(isinstance(k, str) and isinstance(v, str) and v for k, v in raw_map.items()):
             raise HarvestError("field_map", "field_map must map names to source fields")
-        allowed = {"record_id", "organization", "title", "region", "discipline", "quantity",
-                   "published_at", "reference", "description"}
+        allowed = {"record_id", "event_id", "occurred_at", "organization", "title", "region",
+                   "discipline", "quantity", "published_at", "reference", "description"}
         if not set(raw_map).issubset(allowed) or len(set(raw_map.values())) != len(raw_map):
             raise HarvestError("field_map", "field_map contains unknown or repeated fields")
         trust = value.get("trust", 50)
@@ -143,6 +148,7 @@ class Manifest:
 class Record:
     source: str
     source_record_id: str
+    event_id: str
     kind: str
     organization: str
     title: str
@@ -150,6 +156,7 @@ class Record:
     discipline: str
     quantity: int
     published_at: str
+    occurred_at: str
     reference: str
     description: str
     identity: str
@@ -157,3 +164,8 @@ class Record:
 
     def document(self) -> dict[str, Any]:
         return asdict(self)
+
+    def state_document(self) -> dict[str, Any]:
+        document = self.document()
+        del document["event_id"]
+        return document

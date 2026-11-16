@@ -6,6 +6,7 @@ from typing import Any
 
 from .contracts import HarvestError
 from .ledger import Ledger
+from .reconcile import select_current
 
 
 class Inventory:
@@ -24,7 +25,7 @@ class Inventory:
         observations = self.ledger.observations(source=source)
         stats = Counter(item["status"] for item in observations)
         most_recent: dict[str, dict] = {}
-        for observation in observations:
+        for observation in select_current(observations):
             most_recent[observation["record_id"]] = observation
         current = Counter(item["status"] for item in most_recent.values())
         repeated_attempts = [dict(page) for page in pages if page["attempts"] > 1]
